@@ -11,6 +11,11 @@ The Python script comes in two versions:
 
 The first version of the script is optimized by using multithreading and multiprocessing to generate the pack really quickly. The downside is that it uses a lot of RAM, but this script is 4x quicker than the second.
 
+## Needed:
+
+ - Python
+ - ffmpeg
+
 ## How to Use:
 
 - The scripts have only been tested on **Windows**.

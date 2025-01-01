@@ -22,7 +22,7 @@ The first version of the script is optimized by using multithreading and multipr
 - Minecraft needs to be installed on your computer (any launcher will do! ;)).
 - The desired version of the game needs to be launched at least once.
 - To finalize the pack, you need to add the following files to your folder:
-  - `pack.mcmeta` (you need to change the version number; use this table to select the right version: https://minecraft.fandom.com/wiki/Pack_format)
+  - `pack.mcmeta` (you need to change the version number; use this table to select the right version: https://minecraft.wiki/w/Pack_format)
   - `pack.png` (a placeholder version is available in this folder).
 - Finally, you need to zip the following folders inside your folder:
   - `assets` folder

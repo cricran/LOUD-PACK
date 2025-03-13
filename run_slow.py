@@ -59,8 +59,11 @@ def format_time(seconds):
     return f"{int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds"
 
 def main():
-    # .minecraft path folder
-    mc_src = os.path.join(os.getenv("APPDATA"), ".minecraft/assets")
+    if os.name == 'posix' :
+        home = os.path.expanduser("~")
+        mc_src = os.path.join(home, ".var/app/com.mojang.Minecraft/.minecraft/assets")
+    else :
+        mc_src = os.path.join(os.getenv("APPDATA"), ".minecraft/assets")
     # minecraft indexs folder
     mc_index = os.path.join(mc_src, "indexes")
     #

@@ -41,7 +41,12 @@ def process_file(skey, sval, mc_objects, increase_dB, assets_path):
     return skey
 
 def main():
-    mc_src = os.path.join(os.getenv("APPDATA"), ".minecraft/assets")
+    if os.name == 'posix' :
+        home = os.path.expanduser("~")
+        mc_src = os.path.join(home, ".var/app/com.mojang.Minecraft/.minecraft/assets")
+    else :
+        mc_src = os.path.join(os.getenv("APPDATA"), ".minecraft/assets")
+
     mc_index = os.path.join(mc_src, "indexes")
     mc_objects = os.path.join(mc_src, "objects")
 

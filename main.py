@@ -33,6 +33,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 MOJANG_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 ASSET_DOWNLOAD_BASE_URL = "https://resources.download.minecraft.net"
 MODRINTH_API_URL = "https://api.modrinth.com/v2/version"
+CURSEFORGE_UPLOAD_API_URL = (
+    "https://minecraft.curseforge.com/api/projects/{}/upload-file"
+)
+CURSEFORGE_VERSIONS_API_URL = "https://minecraft.curseforge.com/api/game/versions"
 
 
 class LicenseAction(argparse.Action):
@@ -313,6 +317,76 @@ def upload_to_modrinth(
         return None
 
 
+def upload_to_curseforge(
+    zip_path: Path, mc_version: str, project_id: str, token: str
+) -> str | None:
+    """
+    Uploads the finalized ZIP archive to a CurseForge project.
+    First resolves the string version (e.g. '1.20.4') to a CurseForge integer ID.
+    """
+    logging.info(f"Uploading {zip_path.name} to CurseForge project '{project_id}'...")
+    headers = {"X-Api-Token": token}
+
+    # 1. Fetch mapping to find the CF Version ID for the target Minecraft version
+    try:
+        resp = requests.get(CURSEFORGE_VERSIONS_API_URL, headers=headers, timeout=15)
+        resp.raise_for_status()
+        cf_versions = resp.json()
+
+        version_id = None
+        for v in cf_versions:
+            if v.get("name") == mc_version:
+                version_id = v.get("id")
+                break
+
+        if not version_id:
+            logging.error(
+                f"Could not find CurseForge version ID for Minecraft {mc_version}"
+            )
+            return None
+    except requests.exceptions.RequestException as err:
+        logging.error(f"Failed to fetch CurseForge versions mapping: {err}")
+        return None
+
+    # 2. Perform the multipart upload
+    version_type = (
+        "alpha" if any(x in mc_version for x in ["w", "pre", "rc"]) else "release"
+    )
+    metadata = {
+        "changelog": f"Auto-generated {__APP_NAME__} release for Minecraft {mc_version}",
+        "changelogType": "text",
+        "displayName": f"{__APP_NAME__} {mc_version}",
+        "gameVersions": [version_id],
+        "releaseType": version_type,
+    }
+
+    try:
+        with open(zip_path, "rb") as f:
+            files = {
+                "metadata": (None, json.dumps(metadata), "application/json"),
+                "file": (zip_path.name, f, "application/zip"),
+            }
+            upload_url = CURSEFORGE_UPLOAD_API_URL.format(project_id)
+            response = requests.post(
+                upload_url, headers=headers, files=files, timeout=300
+            )
+
+            response.raise_for_status()
+            result = response.json()
+
+            file_id = result.get("id")
+            # CurseForge API doesn't return a direct public URL, so we construct a generic one
+            cf_url = f"https://www.curseforge.com/minecraft/texture-packs/{project_id}/files/{file_id}"
+            logging.info(f"Successfully uploaded to CurseForge! File ID: {file_id}")
+            return cf_url
+
+    except requests.exceptions.RequestException as err:
+        logging.error(f"Failed to upload to CurseForge: {err}")
+        if hasattr(err, "response") and err.response is not None:
+            logging.error(f"CurseForge API response: {err.response.text}")
+        return None
+
+
 def create_parser() -> argparse.ArgumentParser:
     description = (
         f"{__APP_NAME__} - Automated amplified Minecraft resource pack generator."
@@ -380,6 +454,14 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Modrinth Project ID (Requires MODRINTH_TOKEN env variable).",
     )
+    publish_group.add_argument(
+        "--curseforge-project",
+        dest="curseforge_project",
+        type=str,
+        default="",
+        metavar="ID",
+        help="CurseForge Project ID (Requires CURSEFORGE_TOKEN env variable).",
+    )
 
     misc_group = parser.add_argument_group("Miscellaneous")
     misc_group.add_argument("-q", "--quiet", action="store_true", help="Suppress logs.")
@@ -440,6 +522,20 @@ def main() -> None:
                 logging.warning(
                     "Modrinth project ID provided, but MODRINTH_TOKEN environment variable is missing. Skipping Modrinth upload."
                 )
+        curseforge_url = None
+        if package_success and args.curseforge_project:
+            curseforge_token = os.environ.get("CURSEFORGE_TOKEN")
+            if curseforge_token:
+                curseforge_url = upload_to_curseforge(
+                    zip_filename,
+                    args.mc_version,
+                    args.curseforge_project,
+                    curseforge_token,
+                )
+            else:
+                logging.warning(
+                    "CurseForge project ID provided, but CURSEFORGE_TOKEN environment variable is missing. Skipping CurseForge upload."
+                )
 
         webhook_msg = (
             f"📦 **{__APP_NAME__} v{__VERSION__}** pipeline complete\n"
@@ -447,6 +543,8 @@ def main() -> None:
         )
         if modrinth_url:
             webhook_msg += f"\n✅ Successfully published to Modrinth: {modrinth_url}"
+        if curseforge_url:
+            webhook_msg += f"\n✅ CurseForge: {curseforge_url}"
 
         send_discord_webhook(args.webhook_url, webhook_msg)
 

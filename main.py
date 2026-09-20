@@ -3,6 +3,7 @@ import argparse
 import logging
 import sys
 import concurrent.futures
+import subprocess
 from pathlib import Path
 import requests
 
@@ -53,10 +54,6 @@ class LicenseAction(argparse.Action):
 
 
 def send_discord_webhook(webhook_url: str, message: str) -> None:
-    """
-    Dispatches a plaintext message to a Discord webhook for CI/CD monitoring.
-    Fails silently to prevent pipeline interruption on network timeouts.
-    """
     if not webhook_url:
         return
     try:
@@ -67,9 +64,6 @@ def send_discord_webhook(webhook_url: str, message: str) -> None:
 
 
 def fetch_mojang_manifest() -> dict:
-    """
-    Retrieves the global v2 version manifest from Mojang's metadata servers.
-    """
     logging.info(f"Fetching Mojang version manifest from {MOJANG_MANIFEST_URL}")
     try:
         response = requests.get(MOJANG_MANIFEST_URL, timeout=10)
@@ -81,9 +75,6 @@ def fetch_mojang_manifest() -> dict:
 
 
 def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
-    """
-    Parses the manifest to find the metadata URL for the requested game version.
-    """
     if target_version == "latest":
         target_version = manifest["latest"]["release"]
         logging.info(f"Resolved 'latest' to release version: {target_version}")
@@ -103,9 +94,6 @@ def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
 
 
 def fetch_version_metadata(metadata_url: str) -> dict:
-    """
-    Retrieves the specific version metadata JSON containing the asset index URL.
-    """
     logging.info(f"Fetching version metadata from {metadata_url}")
     try:
         response = requests.get(metadata_url, timeout=10)
@@ -117,9 +105,6 @@ def fetch_version_metadata(metadata_url: str) -> dict:
 
 
 def fetch_asset_index(asset_index_url: str) -> dict:
-    """
-    Retrieves the asset index mapping game file paths to their cryptographic hashes.
-    """
     logging.info(f"Fetching asset index from {asset_index_url}")
     try:
         response = requests.get(asset_index_url, timeout=10)
@@ -131,9 +116,6 @@ def fetch_asset_index(asset_index_url: str) -> dict:
 
 
 def filter_sound_assets(asset_objects: dict) -> dict:
-    """
-    Filters the global asset objects to retain only those within the 'minecraft/sounds/' directory.
-    """
     logging.info("Filtering asset index for sound files")
     sound_assets = {
         path: data["hash"]
@@ -145,20 +127,12 @@ def filter_sound_assets(asset_objects: dict) -> dict:
 
 
 def get_asset_url(asset_hash: str) -> str:
-    """
-    Constructs the Mojang asset download URL based on the file hash.
-    The structure is always `<base_url>/<first_two_letters_of_hash>/<full_hash>`.
-    """
     return f"{ASSET_DOWNLOAD_BASE_URL}/{asset_hash[:2]}/{asset_hash}"
 
 
 def download_single_asset(
     asset_path: str, asset_hash: str, base_output_dir: Path
 ) -> Path | None:
-    """
-    Downloads a single asset and reconstructs its directory structure.
-    Skips downloading if the file already exists.
-    """
     target_file = base_output_dir / asset_path
 
     if target_file.exists():
@@ -180,9 +154,6 @@ def download_single_asset(
 def download_assets_concurrently(
     sound_assets: dict, output_dir: Path, threads: int = 16
 ) -> list[Path]:
-    """
-    Downloads multiple assets concurrently utilizing a ThreadPoolExecutor for I/O bound tasks.
-    """
     logging.info(
         f"Starting concurrent download of {len(sound_assets)} files using {threads} threads..."
     )
@@ -199,10 +170,66 @@ def download_assets_concurrently(
             if result:
                 downloaded_files.append(result)
 
-    logging.info(
-        f"Successfully downloaded {len(downloaded_files)}/{len(sound_assets)} audio assets."
-    )
     return downloaded_files
+
+
+def process_single_audio(input_file: Path, output_file: Path, volume: float) -> bool:
+    """
+    Spawns a SoX subprocess to amplify the audio.
+    Skips processing if the output file already exists.
+    """
+    if output_file.exists():
+        return True
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Run SoX to adjust volume
+    cmd = ["sox", "-v", str(volume), str(input_file), str(output_file)]
+    try:
+        subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+        )
+        return True
+    except subprocess.CalledProcessError as err:
+        logging.error(f"SoX failed on {input_file.name}: {err}")
+        return False
+    except FileNotFoundError:
+        logging.critical(
+            "SoX executable not found. Ensure it is installed and in your PATH."
+        )
+        sys.exit(1)
+
+
+def process_audio_concurrently(
+    downloaded_files: list[Path], raw_dir: Path, processed_dir: Path, volume: float
+) -> int:
+    """
+    Uses ProcessPoolExecutor to distribute CPU-bound SoX tasks across all available CPU cores.
+    """
+    logging.info(
+        f"Starting audio amplification ({volume}x) on {len(downloaded_files)} files..."
+    )
+    success_count = 0
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = []
+        for input_file in downloaded_files:
+            # Reconstruct the relative path to maintain directory structure (e.g. minecraft/sounds/...)
+            relative_path = input_file.relative_to(raw_dir)
+            output_file = processed_dir / relative_path
+
+            futures.append(
+                executor.submit(process_single_audio, input_file, output_file, volume)
+            )
+
+        for future in concurrent.futures.as_completed(futures):
+            if future.result():
+                success_count += 1
+
+    logging.info(
+        f"Successfully processed {success_count}/{len(downloaded_files)} audio files."
+    )
+    return success_count
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -308,15 +335,23 @@ def main() -> None:
         logging.error("No sound assets found for this version. Aborting.")
         sys.exit(1)
 
-    # We use an intermediate 'raw_assets' folder to keep original files separate from processed ones
     raw_assets_dir = args.output_dir / "raw_assets"
+    processed_assets_dir = args.output_dir / "processed_assets"
+
     downloaded_files = download_assets_concurrently(sound_assets, raw_assets_dir)
+
+    if downloaded_files:
+        processed_count = process_audio_concurrently(
+            downloaded_files, raw_assets_dir, processed_assets_dir, args.volume
+        )
+    else:
+        processed_count = 0
 
     send_discord_webhook(
         args.webhook_url,
-        f"🚀 **{__APP_NAME__} v{__VERSION__}** pipeline running\n"
+        f"🚀 **{__APP_NAME__} v{__VERSION__}** audio processing complete\n"
         f"Target Version: `{args.mc_version}`\n"
-        f"Successfully downloaded `{len(downloaded_files)}` audio files.",
+        f"Amplified `{processed_count}` audio files by `{args.volume}x`.",
     )
 
 

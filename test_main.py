@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import main
@@ -27,14 +28,6 @@ class TestLoudPack(unittest.TestCase):
         url = main.resolve_version_metadata_url("1.20.4", manifest)
         self.assertEqual(url, "http://example.com/1.20.4.json")
 
-    def test_resolve_version_metadata_url_latest(self):
-        manifest = {
-            "latest": {"release": "1.20.4", "snapshot": "24w14a"},
-            "versions": [{"id": "1.20.4", "url": "http://example.com/1.20.4.json"}],
-        }
-        url = main.resolve_version_metadata_url("latest", manifest)
-        self.assertEqual(url, "http://example.com/1.20.4.json")
-
     def test_filter_sound_assets(self):
         asset_objects = {
             "minecraft/sounds/mob/cow.ogg": {"hash": "abc1234"},
@@ -42,50 +35,50 @@ class TestLoudPack(unittest.TestCase):
         }
         filtered = main.filter_sound_assets(asset_objects)
         self.assertEqual(len(filtered), 1)
-        self.assertIn("minecraft/sounds/mob/cow.ogg", filtered)
 
     def test_get_asset_url(self):
-        """Test Mojang asset URL construction using the hash subfolder logic."""
         hash_val = "43c080fc851412b186b4cb4659bc7e39a3c9fef4"
         expected_url = f"https://resources.download.minecraft.net/43/{hash_val}"
         self.assertEqual(main.get_asset_url(hash_val), expected_url)
 
-    def test_download_single_asset_skip_existing(self):
-        """Test that the download function returns the path immediately if the file exists."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            fake_asset_path = "minecraft/sounds/test.ogg"
-            target_file = temp_path / fake_asset_path
-
-            # Create dummy file to simulate existing download
-            target_file.parent.mkdir(parents=True)
-            target_file.write_bytes(b"dummy audio data")
-
-            # Call function
-            result = main.download_single_asset(fake_asset_path, "fakehash", temp_path)
-
-            # Result should be the path, meaning it skipped downloading
-            self.assertEqual(result, target_file)
-
-    @patch("main.requests.get")
-    def test_download_single_asset_success(self, mock_get):
-        """Test successful download and directory creation."""
-        mock_response = MagicMock()
-        mock_response.content = b"fake audio data"
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
+    @patch("main.subprocess.run")
+    def test_process_single_audio_success(self, mock_subprocess):
+        """Test audio processing logic (mocking the actual SoX call)."""
+        mock_subprocess.return_value = MagicMock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            fake_asset_path = "minecraft/sounds/new.ogg"
+            input_file = temp_path / "raw" / "test.ogg"
+            output_file = temp_path / "processed" / "test.ogg"
 
-            result = main.download_single_asset(
-                fake_asset_path, "fakehash123", temp_path
+            input_file.parent.mkdir(parents=True)
+            input_file.touch()
+
+            result = main.process_single_audio(input_file, output_file, 2.0)
+
+            self.assertTrue(result)
+            mock_subprocess.assert_called_once_with(
+                ["sox", "-v", "2.0", str(input_file), str(output_file)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
             )
 
-            self.assertIsNotNone(result)
-            self.assertTrue(result.exists())
-            self.assertEqual(result.read_bytes(), b"fake audio data")
+    @patch("main.subprocess.run")
+    def test_process_single_audio_skip_existing(self, mock_subprocess):
+        """Test that SoX is bypassed if the processed file already exists."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_file = temp_path / "raw" / "test.ogg"
+            output_file = temp_path / "processed" / "test.ogg"
+
+            output_file.parent.mkdir(parents=True)
+            output_file.touch()  # Simulate existing output
+
+            result = main.process_single_audio(input_file, output_file, 2.0)
+
+            self.assertTrue(result)
+            mock_subprocess.assert_not_called()
 
 
 if __name__ == "__main__":

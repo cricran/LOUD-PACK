@@ -279,6 +279,7 @@ def upload_to_modrinth(
         "project_id": project_id,
         "file_parts": ["file"],
         "dependencies": [],
+        "featured": False,
     }
 
     headers = {"Authorization": token}

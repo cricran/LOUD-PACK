@@ -82,7 +82,9 @@ def fetch_mojang_manifest() -> dict:
         sys.exit(1)
 
 
-def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
+def resolve_version_metadata_url(
+    target_version: str, manifest: dict
+) -> tuple[str, str]:
     if target_version == "latest":
         target_version = manifest["latest"]["release"]
         logging.info(f"Resolved 'latest' to release version: {target_version}")
@@ -95,7 +97,10 @@ def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
             logging.info(
                 f"Successfully resolved metadata URL for version {target_version}"
             )
-            return version_entry["url"]
+            return (
+                target_version,
+                version_entry["url"],
+            )
 
     logging.critical(f"Version '{target_version}' not found in the Mojang manifest.")
     sys.exit(1)
@@ -495,7 +500,9 @@ def main() -> None:
     logging.info(f"Initializing {__APP_NAME__} v{__VERSION__}")
 
     manifest = fetch_mojang_manifest()
-    metadata_url = resolve_version_metadata_url(args.mc_version, manifest)
+    resolved_version, metadata_url = resolve_version_metadata_url(
+        args.mc_version, manifest
+    )
 
     version_metadata = fetch_version_metadata(metadata_url)
     asset_index_url = version_metadata["assetIndex"]["url"]
@@ -517,7 +524,7 @@ def main() -> None:
             downloaded_files, raw_assets_dir, processed_assets_dir, args.volume
         )
 
-        zip_filename = args.output_dir / f"{__APP_NAME__}-{args.mc_version}.zip"
+        zip_filename = args.output_dir / f"{__APP_NAME__}-{resolved_version}.zip"
         repo_root = Path.cwd()
         package_success = package_resource_pack(
             processed_assets_dir, zip_filename, repo_root
@@ -528,7 +535,10 @@ def main() -> None:
             modrinth_token = os.environ.get("MODRINTH_TOKEN")
             if modrinth_token:
                 modrinth_url = upload_to_modrinth(
-                    zip_filename, args.mc_version, args.modrinth_project, modrinth_token
+                    zip_filename,
+                    resolved_version,
+                    args.modrinth_project,
+                    modrinth_token,
                 )
             else:
                 logging.warning(
@@ -540,7 +550,7 @@ def main() -> None:
             if curseforge_token:
                 curseforge_url = upload_to_curseforge(
                     zip_filename,
-                    args.mc_version,
+                    resolved_version,
                     args.curseforge_project,
                     curseforge_token,
                 )
@@ -551,7 +561,7 @@ def main() -> None:
 
         webhook_msg = (
             f"📦 **{__APP_NAME__} v{__VERSION__}** pipeline complete\n"
-            f"Target Version: `{args.mc_version}` | Gain: `+{args.volume} dB`"
+            f"Target Version: `{resolved_version}` | Gain: `+{args.volume} dB`"
         )
         if modrinth_url:
             webhook_msg += f"\n✅ Successfully published to Modrinth: {modrinth_url}"

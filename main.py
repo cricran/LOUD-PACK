@@ -4,6 +4,7 @@ import logging
 import sys
 import concurrent.futures
 import subprocess
+import zipfile
 from pathlib import Path
 import requests
 
@@ -174,16 +175,11 @@ def download_assets_concurrently(
 
 
 def process_single_audio(input_file: Path, output_file: Path, volume: float) -> bool:
-    """
-    Spawns a SoX subprocess to amplify the audio.
-    Skips processing if the output file already exists.
-    """
     if output_file.exists():
         return True
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Run SoX to adjust volume
     cmd = ["sox", "-v", str(volume), str(input_file), str(output_file)]
     try:
         subprocess.run(
@@ -203,9 +199,6 @@ def process_single_audio(input_file: Path, output_file: Path, volume: float) -> 
 def process_audio_concurrently(
     downloaded_files: list[Path], raw_dir: Path, processed_dir: Path, volume: float
 ) -> int:
-    """
-    Uses ProcessPoolExecutor to distribute CPU-bound SoX tasks across all available CPU cores.
-    """
     logging.info(
         f"Starting audio amplification ({volume}x) on {len(downloaded_files)} files..."
     )
@@ -214,10 +207,8 @@ def process_audio_concurrently(
     with concurrent.futures.ProcessPoolExecutor() as executor:
         futures = []
         for input_file in downloaded_files:
-            # Reconstruct the relative path to maintain directory structure (e.g. minecraft/sounds/...)
             relative_path = input_file.relative_to(raw_dir)
             output_file = processed_dir / relative_path
-
             futures.append(
                 executor.submit(process_single_audio, input_file, output_file, volume)
             )
@@ -230,6 +221,46 @@ def process_audio_concurrently(
         f"Successfully processed {success_count}/{len(downloaded_files)} audio files."
     )
     return success_count
+
+
+def package_resource_pack(
+    processed_dir: Path, output_zip: Path, repo_root: Path
+) -> bool:
+    """
+    Compresses the processed audio files into a valid Minecraft Resource Pack format.
+    Ensures the internal directory structure starts with 'assets/' and includes metadata.
+    """
+    logging.info(f"Packaging resource pack into {output_zip}...")
+    try:
+        with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in processed_dir.rglob("*"):
+                if file_path.is_file():
+                    # Map 'minecraft/sounds/...' to 'assets/minecraft/sounds/...'
+                    arcname = f"assets/{file_path.relative_to(processed_dir)}"
+                    zipf.write(file_path, arcname)
+
+            pack_mcmeta = repo_root / "pack.mcmeta"
+            pack_png = repo_root / "pack.png"
+
+            if pack_mcmeta.exists():
+                zipf.write(pack_mcmeta, "pack.mcmeta")
+            else:
+                logging.warning(
+                    "pack.mcmeta not found in repository root. Pack may be invalid."
+                )
+
+            if pack_png.exists():
+                zipf.write(pack_png, "pack.png")
+            else:
+                logging.warning(
+                    "pack.png not found in repository root. Using default icon."
+                )
+
+        logging.info(f"Successfully created resource pack archive: {output_zip}")
+        return True
+    except Exception as err:
+        logging.error(f"Failed to package resource pack: {err}")
+        return False
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -341,18 +372,21 @@ def main() -> None:
     downloaded_files = download_assets_concurrently(sound_assets, raw_assets_dir)
 
     if downloaded_files:
-        processed_count = process_audio_concurrently(
+        process_audio_concurrently(
             downloaded_files, raw_assets_dir, processed_assets_dir, args.volume
         )
-    else:
-        processed_count = 0
 
-    send_discord_webhook(
-        args.webhook_url,
-        f"🚀 **{__APP_NAME__} v{__VERSION__}** audio processing complete\n"
-        f"Target Version: `{args.mc_version}`\n"
-        f"Amplified `{processed_count}` audio files by `{args.volume}x`.",
-    )
+        # Package everything into a ZIP
+        zip_filename = args.output_dir / f"{__APP_NAME__}-{args.mc_version}.zip"
+        repo_root = Path.cwd()
+        package_resource_pack(processed_assets_dir, zip_filename, repo_root)
+
+        send_discord_webhook(
+            args.webhook_url,
+            f"📦 **{__APP_NAME__} v{__VERSION__}** packaging complete\n"
+            f"Target Version: `{args.mc_version}`\n"
+            f"Archive generated successfully.",
+        )
 
 
 if __name__ == "__main__":

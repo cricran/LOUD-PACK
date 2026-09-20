@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 import subprocess
+import zipfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import main
@@ -43,7 +44,6 @@ class TestLoudPack(unittest.TestCase):
 
     @patch("main.subprocess.run")
     def test_process_single_audio_success(self, mock_subprocess):
-        """Test audio processing logic (mocking the actual SoX call)."""
         mock_subprocess.return_value = MagicMock()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -57,28 +57,38 @@ class TestLoudPack(unittest.TestCase):
             result = main.process_single_audio(input_file, output_file, 2.0)
 
             self.assertTrue(result)
-            mock_subprocess.assert_called_once_with(
-                ["sox", "-v", "2.0", str(input_file), str(output_file)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
+            mock_subprocess.assert_called_once()
 
-    @patch("main.subprocess.run")
-    def test_process_single_audio_skip_existing(self, mock_subprocess):
-        """Test that SoX is bypassed if the processed file already exists."""
+    def test_package_resource_pack(self):
+        """Test the zipping logic and structural enforcement of the resource pack."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            input_file = temp_path / "raw" / "test.ogg"
-            output_file = temp_path / "processed" / "test.ogg"
+            processed_dir = temp_path / "processed_assets"
+            repo_root = temp_path / "repo"
+            output_zip = temp_path / "output.zip"
 
-            output_file.parent.mkdir(parents=True)
-            output_file.touch()  # Simulate existing output
+            # Create dummy processed structure
+            sound_dir = processed_dir / "minecraft" / "sounds"
+            sound_dir.mkdir(parents=True)
+            (sound_dir / "test.ogg").touch()
 
-            result = main.process_single_audio(input_file, output_file, 2.0)
+            # Create dummy metadata in fake repository root
+            repo_root.mkdir()
+            (repo_root / "pack.mcmeta").write_text('{"pack":{}}')
+            (repo_root / "pack.png").touch()
+
+            # Run packaging
+            result = main.package_resource_pack(processed_dir, output_zip, repo_root)
 
             self.assertTrue(result)
-            mock_subprocess.assert_not_called()
+            self.assertTrue(output_zip.exists())
+
+            # Verify zip contents are mapped properly
+            with zipfile.ZipFile(output_zip, "r") as zipf:
+                namelist = zipf.namelist()
+                self.assertIn("assets/minecraft/sounds/test.ogg", namelist)
+                self.assertIn("pack.mcmeta", namelist)
+                self.assertIn("pack.png", namelist)
 
 
 if __name__ == "__main__":

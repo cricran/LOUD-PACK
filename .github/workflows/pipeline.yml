@@ -1,0 +1,44 @@
+name: LOUD-PACK Automated Pipeline
+
+on:
+  # Runs automatically every day at 02:00 AM
+  schedule:
+    - cron: '0 2 * * *'
+  # Allows manual triggering from the web interface
+  workflow_dispatch:
+    inputs:
+      mc_version:
+        description: 'Target Minecraft version (leave as "latest" for daily auto-builds)'
+        required: true
+        default: 'latest'
+
+jobs:
+  generate-and-publish:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Execute LOUD-PACK generator
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          TARGET_VERSION="${{ github.event.inputs.mc_version || 'latest' }}"
+          
+          echo "Starting LOUD-PACK pipeline for version: $TARGET_VERSION"
+          
+          # Execute within the Nix development environment to ensure Python and SoX are available
+          nix develop --command python main.py \
+            -m "$TARGET_VERSION" \
+            -v 50.0 \
+            --modrinth-project jO2ajNmZ \
+            --curseforge-project 888239 \
+            -w "$DISCORD_WEBHOOK"

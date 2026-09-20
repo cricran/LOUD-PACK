@@ -146,31 +146,6 @@ def check_version_exists_modrinth(project_id: str, version_number: str) -> bool:
         return False
 
 
-def check_version_exists_curseforge(
-    project_id: str, mc_version: str, token: str
-) -> bool:
-    """
-    Checks if a specific version is already published on CurseForge by querying project files.
-    """
-    if not project_id or not token:
-        return False
-
-    url = f"https://api.curseforge.com/v1/mods/{project_id}/files"
-    headers = {"x-api-key": token}
-
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            expected_name = f"{__APP_NAME__} {mc_version}"
-            for file_data in data.get("data", []):
-                if file_data.get("displayName") == expected_name:
-                    return True
-        return False
-    except requests.exceptions.RequestException:
-        return False
-
-
 def filter_sound_assets(asset_objects: dict) -> dict:
     logging.info("Filtering asset index for sound files")
     sound_assets = {
@@ -547,33 +522,13 @@ def main() -> None:
         args.mc_version, manifest
     )
 
-    already_on_modrinth = False
     if args.modrinth_project:
         logging.info(f"Checking if version {resolved_version} exists on Modrinth...")
-        already_on_modrinth = check_version_exists_modrinth(
-            args.modrinth_project, resolved_version
-        )
-        if already_on_modrinth:
-            logging.info("-> Already published on Modrinth.")
-
-    already_on_curseforge = False
-    cf_token = os.environ.get("CURSEFORGE_TOKEN", "")
-    if args.curseforge_project:
-        logging.info(f"Checking if version {resolved_version} exists on CurseForge...")
-        already_on_curseforge = check_version_exists_curseforge(
-            args.curseforge_project, resolved_version, cf_token
-        )
-        if already_on_curseforge:
-            logging.info("-> Already published on CurseForge.")
-
-    modrinth_satisfied = already_on_modrinth if args.modrinth_project else True
-    curseforge_satisfied = already_on_curseforge if args.curseforge_project else True
-
-    if modrinth_satisfied and curseforge_satisfied:
-        logging.info(
-            f"Version {resolved_version} is already fully published on all targeted platforms. Skipping execution."
-        )
-        sys.exit(0)
+        if check_version_exists_modrinth(args.modrinth_project, resolved_version):
+            logging.info(
+                f"Version {resolved_version} is already published on Modrinth. Assuming CurseForge is also up to date. Skipping execution."
+            )
+            sys.exit(0)
 
     version_metadata = fetch_version_metadata(metadata_url)
     asset_index_url = version_metadata["assetIndex"]["url"]
@@ -602,7 +557,7 @@ def main() -> None:
         )
 
         modrinth_url = None
-        if package_success and args.modrinth_project and not already_on_modrinth:
+        if package_success and args.modrinth_project:
             modrinth_token = os.environ.get("MODRINTH_TOKEN")
             if modrinth_token:
                 modrinth_url = upload_to_modrinth(
@@ -616,7 +571,7 @@ def main() -> None:
                     "Modrinth project ID provided, but MODRINTH_TOKEN environment variable is missing. Skipping Modrinth upload."
                 )
         curseforge_url = None
-        if package_success and args.curseforge_project and not already_on_curseforge:
+        if package_success and args.curseforge_project:
             curseforge_token = os.environ.get("CURSEFORGE_TOKEN")
             if curseforge_token:
                 curseforge_url = upload_to_curseforge(
@@ -636,13 +591,9 @@ def main() -> None:
         )
         if modrinth_url:
             webhook_msg += f"\n✅ Successfully published to Modrinth: {modrinth_url}"
-        elif already_on_modrinth and args.modrinth_project:
-            webhook_msg += f"\n⏭️ Modrinth: Skipped (Already exists)"
 
         if curseforge_url:
             webhook_msg += f"\n✅ CurseForge: {curseforge_url}"
-        elif already_on_curseforge and args.curseforge_project:
-            webhook_msg += f"\n⏭️ CurseForge: Skipped (Already exists)"
 
         send_discord_webhook(args.webhook_url, webhook_msg)
 

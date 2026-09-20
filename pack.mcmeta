@@ -1,7 +1,8 @@
 {
   "pack": {
-    "pack_format": 6,
-    "description": "Everythings is LOUD
-v1.0: MC 1.16.4 by Cricran, Enjoy !"
+    "min_format": 84.0,
+    "max_format": 99999.0,
+    "description": "Everythings is LOUD v1.0 by Cricran. Enjoy !"
   }
 }
+

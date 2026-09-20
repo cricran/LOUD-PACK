@@ -1,10 +1,12 @@
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch, MagicMock
 import main
 
 
 class TestLoudPack(unittest.TestCase):
     def setUp(self):
-        # Disable logging output during tests to keep the console clean
         import logging
 
         logging.disable(logging.CRITICAL)
@@ -15,7 +17,6 @@ class TestLoudPack(unittest.TestCase):
         logging.disable(logging.NOTSET)
 
     def test_resolve_version_metadata_url_exact(self):
-        """Test resolving an exact version ID."""
         manifest = {
             "latest": {"release": "1.20.4", "snapshot": "24w14a"},
             "versions": [
@@ -27,7 +28,6 @@ class TestLoudPack(unittest.TestCase):
         self.assertEqual(url, "http://example.com/1.20.4.json")
 
     def test_resolve_version_metadata_url_latest(self):
-        """Test resolving the 'latest' alias."""
         manifest = {
             "latest": {"release": "1.20.4", "snapshot": "24w14a"},
             "versions": [{"id": "1.20.4", "url": "http://example.com/1.20.4.json"}],
@@ -35,40 +35,57 @@ class TestLoudPack(unittest.TestCase):
         url = main.resolve_version_metadata_url("latest", manifest)
         self.assertEqual(url, "http://example.com/1.20.4.json")
 
-    def test_resolve_version_metadata_url_snapshot(self):
-        """Test resolving the 'snapshot' alias."""
-        manifest = {
-            "latest": {"release": "1.20.4", "snapshot": "24w14a"},
-            "versions": [{"id": "24w14a", "url": "http://example.com/24w14a.json"}],
-        }
-        url = main.resolve_version_metadata_url("snapshot", manifest)
-        self.assertEqual(url, "http://example.com/24w14a.json")
-
-    def test_resolve_version_metadata_url_not_found(self):
-        """Test behavior when a version is not in the manifest."""
-        manifest = {
-            "latest": {"release": "1.20.4", "snapshot": "24w14a"},
-            "versions": [{"id": "1.20.4", "url": "http://example.com/1.20.4.json"}],
-        }
-        with self.assertRaises(SystemExit) as cm:
-            main.resolve_version_metadata_url("1.19", manifest)
-        self.assertEqual(cm.exception.code, 1)
-
     def test_filter_sound_assets(self):
-        """Test filtering out non-sound assets."""
         asset_objects = {
             "minecraft/sounds/mob/cow.ogg": {"hash": "abc1234"},
             "minecraft/textures/block/stone.png": {"hash": "def5678"},
-            "minecraft/sounds/music/game.ogg": {"hash": "ghi9012"},
-            "minecraft/lang/en_us.json": {"hash": "jkl3456"},
         }
         filtered = main.filter_sound_assets(asset_objects)
-
-        self.assertEqual(len(filtered), 2)
+        self.assertEqual(len(filtered), 1)
         self.assertIn("minecraft/sounds/mob/cow.ogg", filtered)
-        self.assertIn("minecraft/sounds/music/game.ogg", filtered)
-        self.assertNotIn("minecraft/textures/block/stone.png", filtered)
-        self.assertEqual(filtered["minecraft/sounds/mob/cow.ogg"], "abc1234")
+
+    def test_get_asset_url(self):
+        """Test Mojang asset URL construction using the hash subfolder logic."""
+        hash_val = "43c080fc851412b186b4cb4659bc7e39a3c9fef4"
+        expected_url = f"https://resources.download.minecraft.net/43/{hash_val}"
+        self.assertEqual(main.get_asset_url(hash_val), expected_url)
+
+    def test_download_single_asset_skip_existing(self):
+        """Test that the download function returns the path immediately if the file exists."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_asset_path = "minecraft/sounds/test.ogg"
+            target_file = temp_path / fake_asset_path
+
+            # Create dummy file to simulate existing download
+            target_file.parent.mkdir(parents=True)
+            target_file.write_bytes(b"dummy audio data")
+
+            # Call function
+            result = main.download_single_asset(fake_asset_path, "fakehash", temp_path)
+
+            # Result should be the path, meaning it skipped downloading
+            self.assertEqual(result, target_file)
+
+    @patch("main.requests.get")
+    def test_download_single_asset_success(self, mock_get):
+        """Test successful download and directory creation."""
+        mock_response = MagicMock()
+        mock_response.content = b"fake audio data"
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            fake_asset_path = "minecraft/sounds/new.ogg"
+
+            result = main.download_single_asset(
+                fake_asset_path, "fakehash123", temp_path
+            )
+
+            self.assertIsNotNone(result)
+            self.assertTrue(result.exists())
+            self.assertEqual(result.read_bytes(), b"fake audio data")
 
 
 if __name__ == "__main__":

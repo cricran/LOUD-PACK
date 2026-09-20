@@ -2,6 +2,7 @@
 import argparse
 import logging
 import sys
+import concurrent.futures
 from pathlib import Path
 import requests
 
@@ -26,6 +27,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 MOJANG_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+ASSET_DOWNLOAD_BASE_URL = "https://resources.download.minecraft.net"
 
 
 class LicenseAction(argparse.Action):
@@ -67,7 +69,6 @@ def send_discord_webhook(webhook_url: str, message: str) -> None:
 def fetch_mojang_manifest() -> dict:
     """
     Retrieves the global v2 version manifest from Mojang's metadata servers.
-    Contains pointers to individual version JSON endpoints.
     """
     logging.info(f"Fetching Mojang version manifest from {MOJANG_MANIFEST_URL}")
     try:
@@ -82,7 +83,6 @@ def fetch_mojang_manifest() -> dict:
 def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
     """
     Parses the manifest to find the metadata URL for the requested game version.
-    Automatically resolves 'latest' and 'snapshot' aliases to their current IDs.
     """
     if target_version == "latest":
         target_version = manifest["latest"]["release"]
@@ -133,7 +133,6 @@ def fetch_asset_index(asset_index_url: str) -> dict:
 def filter_sound_assets(asset_objects: dict) -> dict:
     """
     Filters the global asset objects to retain only those within the 'minecraft/sounds/' directory.
-    Returns a dictionary mapping the original relative path to its corresponding hash.
     """
     logging.info("Filtering asset index for sound files")
     sound_assets = {
@@ -143,6 +142,67 @@ def filter_sound_assets(asset_objects: dict) -> dict:
     }
     logging.info(f"Found {len(sound_assets)} sound files to process")
     return sound_assets
+
+
+def get_asset_url(asset_hash: str) -> str:
+    """
+    Constructs the Mojang asset download URL based on the file hash.
+    The structure is always `<base_url>/<first_two_letters_of_hash>/<full_hash>`.
+    """
+    return f"{ASSET_DOWNLOAD_BASE_URL}/{asset_hash[:2]}/{asset_hash}"
+
+
+def download_single_asset(
+    asset_path: str, asset_hash: str, base_output_dir: Path
+) -> Path | None:
+    """
+    Downloads a single asset and reconstructs its directory structure.
+    Skips downloading if the file already exists.
+    """
+    target_file = base_output_dir / asset_path
+
+    if target_file.exists():
+        return target_file
+
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    url = get_asset_url(asset_hash)
+
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        target_file.write_bytes(response.content)
+        return target_file
+    except requests.exceptions.RequestException as err:
+        logging.error(f"Failed to download {asset_path}: {err}")
+        return None
+
+
+def download_assets_concurrently(
+    sound_assets: dict, output_dir: Path, threads: int = 16
+) -> list[Path]:
+    """
+    Downloads multiple assets concurrently utilizing a ThreadPoolExecutor for I/O bound tasks.
+    """
+    logging.info(
+        f"Starting concurrent download of {len(sound_assets)} files using {threads} threads..."
+    )
+    downloaded_files = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {
+            executor.submit(download_single_asset, path, hash_val, output_dir): path
+            for path, hash_val in sound_assets.items()
+        }
+
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                downloaded_files.append(result)
+
+    logging.info(
+        f"Successfully downloaded {len(downloaded_files)}/{len(sound_assets)} audio assets."
+    )
+    return downloaded_files
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -192,7 +252,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("./build"),
         metavar="DIR",
-        help="Output directory for the finalized ZIP archive. Default: %(default)s.",
+        help="Output directory for the downloaded and processed files. Default: %(default)s.",
     )
     io_group.add_argument(
         "-w",
@@ -248,11 +308,15 @@ def main() -> None:
         logging.error("No sound assets found for this version. Aborting.")
         sys.exit(1)
 
+    # We use an intermediate 'raw_assets' folder to keep original files separate from processed ones
+    raw_assets_dir = args.output_dir / "raw_assets"
+    downloaded_files = download_assets_concurrently(sound_assets, raw_assets_dir)
+
     send_discord_webhook(
         args.webhook_url,
-        f"🚀 **{__APP_NAME__} v{__VERSION__}** pipeline initiated\n"
-        f"Target Version: `{args.mc_version}` | Audio Multiplier: `{args.volume}x`\n"
-        f"Found `{len(sound_assets)}` audio files in the asset index.",
+        f"🚀 **{__APP_NAME__} v{__VERSION__}** pipeline running\n"
+        f"Target Version: `{args.mc_version}`\n"
+        f"Successfully downloaded `{len(downloaded_files)}` audio files.",
     )
 
 

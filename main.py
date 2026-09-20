@@ -84,7 +84,6 @@ def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
     Parses the manifest to find the metadata URL for the requested game version.
     Automatically resolves 'latest' and 'snapshot' aliases to their current IDs.
     """
-    # Resolve aliases
     if target_version == "latest":
         target_version = manifest["latest"]["release"]
         logging.info(f"Resolved 'latest' to release version: {target_version}")
@@ -92,7 +91,6 @@ def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
         target_version = manifest["latest"]["snapshot"]
         logging.info(f"Resolved 'snapshot' to latest snapshot: {target_version}")
 
-    # Traverse version array to locate matching ID
     for version_entry in manifest["versions"]:
         if version_entry["id"] == target_version:
             logging.info(
@@ -102,6 +100,49 @@ def resolve_version_metadata_url(target_version: str, manifest: dict) -> str:
 
     logging.critical(f"Version '{target_version}' not found in the Mojang manifest.")
     sys.exit(1)
+
+
+def fetch_version_metadata(metadata_url: str) -> dict:
+    """
+    Retrieves the specific version metadata JSON containing the asset index URL.
+    """
+    logging.info(f"Fetching version metadata from {metadata_url}")
+    try:
+        response = requests.get(metadata_url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as err:
+        logging.critical(f"Network failure while fetching version metadata: {err}")
+        sys.exit(1)
+
+
+def fetch_asset_index(asset_index_url: str) -> dict:
+    """
+    Retrieves the asset index mapping game file paths to their cryptographic hashes.
+    """
+    logging.info(f"Fetching asset index from {asset_index_url}")
+    try:
+        response = requests.get(asset_index_url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as err:
+        logging.critical(f"Network failure while fetching asset index: {err}")
+        sys.exit(1)
+
+
+def filter_sound_assets(asset_objects: dict) -> dict:
+    """
+    Filters the global asset objects to retain only those within the 'minecraft/sounds/' directory.
+    Returns a dictionary mapping the original relative path to its corresponding hash.
+    """
+    logging.info("Filtering asset index for sound files")
+    sound_assets = {
+        path: data["hash"]
+        for path, data in asset_objects.items()
+        if path.startswith("minecraft/sounds/")
+    }
+    logging.info(f"Found {len(sound_assets)} sound files to process")
+    return sound_assets
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -194,15 +235,24 @@ def main() -> None:
 
     logging.info(f"Initializing {__APP_NAME__} v{__VERSION__}")
 
-    # 1. Fetch manifest and resolve version
     manifest = fetch_mojang_manifest()
     metadata_url = resolve_version_metadata_url(args.mc_version, manifest)
+
+    version_metadata = fetch_version_metadata(metadata_url)
+    asset_index_url = version_metadata["assetIndex"]["url"]
+
+    asset_index = fetch_asset_index(asset_index_url)
+    sound_assets = filter_sound_assets(asset_index["objects"])
+
+    if not sound_assets:
+        logging.error("No sound assets found for this version. Aborting.")
+        sys.exit(1)
 
     send_discord_webhook(
         args.webhook_url,
         f"🚀 **{__APP_NAME__} v{__VERSION__}** pipeline initiated\n"
         f"Target Version: `{args.mc_version}` | Audio Multiplier: `{args.volume}x`\n"
-        f"Metadata URL resolved successfully.",
+        f"Found `{len(sound_assets)}` audio files in the asset index.",
     )
 
 

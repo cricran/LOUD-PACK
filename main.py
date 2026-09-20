@@ -380,10 +380,22 @@ def upload_to_curseforge(
             logging.info(f"Successfully uploaded to CurseForge! File ID: {file_id}")
             return cf_url
 
+    except requests.exceptions.HTTPError as err:
+        if err.response.status_code == 524:
+            logging.error("CurseForge upload failed: Error 524 (Cloudflare Timeout).")
+            logging.error(
+                "The archive is too large to be processed within the time limit imposed by CurseForge servers (100s)."
+            )
+            logging.error(
+                "Note: The file may have been successfully received and could appear on the project page within a few minutes."
+            )
+        else:
+            logging.error(
+                f"CurseForge API error ({err.response.status_code}): {err.response.text}"
+            )
+        return None
     except requests.exceptions.RequestException as err:
-        logging.error(f"Failed to upload to CurseForge: {err}")
-        if hasattr(err, "response") and err.response is not None:
-            logging.error(f"CurseForge API response: {err.response.text}")
+        logging.error(f"Failed to connect to CurseForge: {err}")
         return None
 
 

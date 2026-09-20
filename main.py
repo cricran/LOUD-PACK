@@ -271,13 +271,14 @@ def upload_to_modrinth(
     )
 
     data_payload = {
-        "name": f"Loud Pack {mc_version}",
+        "name": f"{__APP_NAME__} [ {mc_version} ]",
         "version_number": mc_version,
         "game_versions": [mc_version],
         "version_type": version_type,
         "loaders": ["minecraft"],
         "project_id": project_id,
         "file_parts": ["file"],
+        "dependencies": [],
     }
 
     headers = {"Authorization": token}

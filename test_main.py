@@ -27,7 +27,8 @@ class TestLoudPack(unittest.TestCase):
                 {"id": "24w14a", "url": "http://example.com/24w14a.json"},
             ],
         }
-        url = main.resolve_version_metadata_url("1.20.4", manifest)
+        version, url = main.resolve_version_metadata_url("1.20.4", manifest)
+        self.assertEqual(version, "1.20.4")
         self.assertEqual(url, "http://example.com/1.20.4.json")
 
     def test_filter_sound_assets(self):

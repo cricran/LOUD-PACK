@@ -2,13 +2,15 @@
 import argparse
 import logging
 import sys
+import os
+import json
 import concurrent.futures
 import subprocess
 import zipfile
 from pathlib import Path
 import requests
 
-__APP_NAME__ = "loud-pack"
+__APP_NAME__ = "LOUD-PACK"
 __VERSION__ = "1.0.0"
 __LICENSE__ = """GNU General Public License v3.0
 
@@ -30,6 +32,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 MOJANG_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 ASSET_DOWNLOAD_BASE_URL = "https://resources.download.minecraft.net"
+MODRINTH_API_URL = "https://api.modrinth.com/v2/version"
 
 
 class LicenseAction(argparse.Action):
@@ -179,8 +182,6 @@ def process_single_audio(input_file: Path, output_file: Path, volume_db: float) 
         return True
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Convert decibels to a linear multiplier for SoX's -v flag
     multiplier = 10 ** (volume_db / 20.0)
     multiplier_str = f"{multiplier:.4f}"
 
@@ -245,17 +246,9 @@ def package_resource_pack(
 
             if pack_mcmeta.exists():
                 zipf.write(pack_mcmeta, "pack.mcmeta")
-            else:
-                logging.warning(
-                    "pack.mcmeta not found in repository root. Pack may be invalid."
-                )
 
             if pack_png.exists():
                 zipf.write(pack_png, "pack.png")
-            else:
-                logging.warning(
-                    "pack.png not found in repository root. Using default icon."
-                )
 
         logging.info(f"Successfully created resource pack archive: {output_zip}")
         return True
@@ -264,14 +257,67 @@ def package_resource_pack(
         return False
 
 
+def upload_to_modrinth(
+    zip_path: Path, mc_version: str, project_id: str, token: str
+) -> str | None:
+    """
+    Uploads the finalized ZIP archive to a Modrinth project using the Labrinth API.
+    """
+    logging.info(f"Uploading {zip_path.name} to Modrinth project '{project_id}'...")
+
+    # Classify as alpha if it's a snapshot (contains 'w' or 'pre' or 'rc')
+    version_type = (
+        "alpha" if any(x in mc_version for x in ["w", "pre", "rc"]) else "release"
+    )
+
+    data_payload = {
+        "name": f"Loud Pack {mc_version}",
+        "version_number": mc_version,
+        "game_versions": [mc_version],
+        "version_type": version_type,
+        "loaders": ["minecraft"],
+        "project_id": project_id,
+        "file_parts": ["file"],
+    }
+
+    headers = {"Authorization": token}
+
+    try:
+        with open(zip_path, "rb") as f:
+            files = {"file": (zip_path.name, f, "application/zip")}
+            response = requests.post(
+                MODRINTH_API_URL,
+                headers=headers,
+                data={"data": json.dumps(data_payload)},
+                files=files,
+                timeout=60,
+            )
+
+            response.raise_for_status()
+            result = response.json()
+
+            modrinth_url = (
+                f"https://modrinth.com/project/{project_id}/version/{result['id']}"
+            )
+            logging.info(
+                f"Successfully uploaded to Modrinth! Version URL: {modrinth_url}"
+            )
+            return modrinth_url
+
+    except requests.exceptions.RequestException as err:
+        logging.error(f"Failed to upload to Modrinth: {err}")
+        if hasattr(err, "response") and err.response is not None:
+            logging.error(f"Modrinth API response: {err.response.text}")
+        return None
+
+
 def create_parser() -> argparse.ArgumentParser:
     description = (
         f"{__APP_NAME__} - Automated amplified Minecraft resource pack generator."
     )
     epilog = """Usage examples:
   %(prog)s -m latest -v 10.0
-  %(prog)s --mc-version 24w14a --volume 6.0 --output-dir ./dist
-  %(prog)s -m 1.20.4 --webhook-url "https://discord.com/api/webhooks/..."
+  %(prog)s --mc-version 24w14a --modrinth-project a1b2c3d4
   %(prog)s --license
 """
 
@@ -291,7 +337,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         default="latest",
         metavar="VERSION",
-        help="Target Minecraft version ('latest', 'snapshot', or explicit like '24w14a'). Default: %(default)s.",
+        help="Target Minecraft version ('latest', 'snapshot', or explicit). Default: %(default)s.",
     )
     game_group.add_argument(
         "-v",
@@ -311,7 +357,7 @@ def create_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("./build"),
         metavar="DIR",
-        help="Output directory for the downloaded and processed files. Default: %(default)s.",
+        help="Output directory for files. Default: %(default)s.",
     )
     io_group.add_argument(
         "-w",
@@ -322,25 +368,23 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="URL",
         help="Discord webhook URL for pipeline status reporting.",
     )
-    io_group.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        help="Suppress standard informational logs.",
+
+    publish_group = parser.add_argument_group("Publishing Options")
+    publish_group.add_argument(
+        "--modrinth-project",
+        dest="modrinth_project",
+        type=str,
+        default="",
+        metavar="ID",
+        help="Modrinth Project ID (Requires MODRINTH_TOKEN env variable).",
     )
 
-    info_group = parser.add_argument_group("Information")
-    info_group.add_argument(
-        "-V",
-        "--version",
-        action="version",
-        version=f"%(prog)s {__VERSION__}",
-        help="Show application version and exit.",
+    misc_group = parser.add_argument_group("Miscellaneous")
+    misc_group.add_argument("-q", "--quiet", action="store_true", help="Suppress logs.")
+    misc_group.add_argument(
+        "-V", "--version", action="version", version=f"%(prog)s {__VERSION__}"
     )
-    info_group.add_argument(
-        "--license",
-        action=LicenseAction,
-    )
+    misc_group.add_argument("--license", action=LicenseAction)
 
     return parser
 
@@ -379,14 +423,30 @@ def main() -> None:
 
         zip_filename = args.output_dir / f"{__APP_NAME__}-{args.mc_version}.zip"
         repo_root = Path.cwd()
-        package_resource_pack(processed_assets_dir, zip_filename, repo_root)
-
-        send_discord_webhook(
-            args.webhook_url,
-            f"📦 **{__APP_NAME__} v{__VERSION__}** packaging complete\n"
-            f"Target Version: `{args.mc_version}` | Gain: `+{args.volume} dB`\n"
-            f"Archive generated successfully.",
+        package_success = package_resource_pack(
+            processed_assets_dir, zip_filename, repo_root
         )
+
+        modrinth_url = None
+        if package_success and args.modrinth_project:
+            modrinth_token = os.environ.get("MODRINTH_TOKEN")
+            if modrinth_token:
+                modrinth_url = upload_to_modrinth(
+                    zip_filename, args.mc_version, args.modrinth_project, modrinth_token
+                )
+            else:
+                logging.warning(
+                    "Modrinth project ID provided, but MODRINTH_TOKEN environment variable is missing. Skipping Modrinth upload."
+                )
+
+        webhook_msg = (
+            f"📦 **{__APP_NAME__} v{__VERSION__}** pipeline complete\n"
+            f"Target Version: `{args.mc_version}` | Gain: `+{args.volume} dB`"
+        )
+        if modrinth_url:
+            webhook_msg += f"\n✅ Successfully published to Modrinth: {modrinth_url}"
+
+        send_discord_webhook(args.webhook_url, webhook_msg)
 
 
 if __name__ == "__main__":

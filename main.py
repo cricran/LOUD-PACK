@@ -517,6 +517,8 @@ def main() -> None:
 
     logging.info(f"Initializing {__APP_NAME__} v{__VERSION__}")
 
+    send_discord_webhook(args.webhook_url, f"⏳ **{__APP_NAME__}** is starting up...\n")
+
     manifest = fetch_mojang_manifest()
     resolved_version, metadata_url = resolve_version_metadata_url(
         args.mc_version, manifest
@@ -527,6 +529,10 @@ def main() -> None:
         if check_version_exists_modrinth(args.modrinth_project, resolved_version):
             logging.info(
                 f"Version {resolved_version} is already published on Modrinth. Assuming CurseForge is also up to date. Skipping execution."
+            )
+            send_discord_webhook(
+                args.webhook_url,
+                f"Version {resolved_version} is already published on Modrinth. Assuming CurseForge is also up to date. Skipping execution.\n",
             )
             sys.exit(0)
 
@@ -539,6 +545,12 @@ def main() -> None:
     if not sound_assets:
         logging.error("No sound assets found for this version. Aborting.")
         sys.exit(1)
+
+    send_discord_webhook(
+        args.webhook_url,
+        f"⏳ **{__APP_NAME__}** is building a new release for Minecraft `{resolved_version}`...\n"
+        f"Downloading and amplifying `{len(sound_assets)}` audio files by `+{args.volume} dB`.",
+    )
 
     raw_assets_dir = args.output_dir / "raw_assets"
     processed_assets_dir = args.output_dir / "processed_assets"
@@ -586,8 +598,9 @@ def main() -> None:
                 )
 
         webhook_msg = (
-            f"📦 **{__APP_NAME__} v{__VERSION__}** pipeline complete\n"
-            f"Target Version: `{resolved_version}` | Gain: `+{args.volume} dB`"
+            f"@here\n"
+            f"🎉 **{__APP_NAME__} {resolved_version} is now available!**\n"
+            f"Volume Gain: `+{args.volume} dB`"
         )
         if modrinth_url:
             webhook_msg += f"\n✅ Successfully published to Modrinth: {modrinth_url}"

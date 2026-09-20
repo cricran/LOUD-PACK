@@ -290,7 +290,7 @@ def upload_to_modrinth(
                 headers=headers,
                 data={"data": json.dumps(data_payload)},
                 files=files,
-                timeout=60,
+                timeout=300,
             )
 
             response.raise_for_status()

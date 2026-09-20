@@ -10,7 +10,7 @@ on:
       mc_version:
         description: 'Target Minecraft version (leave as "latest" for daily auto-builds)'
         required: true
-        default: 'latest'
+        default: 'newest'
 
 jobs:
   generate-and-publish:

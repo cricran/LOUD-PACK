@@ -54,36 +54,37 @@ class TestLoudPack(unittest.TestCase):
             input_file.parent.mkdir(parents=True)
             input_file.touch()
 
-            result = main.process_single_audio(input_file, output_file, 2.0)
+            # Test with +20dB which exactly equals a multiplier of 10.0
+            result = main.process_single_audio(input_file, output_file, 20.0)
 
             self.assertTrue(result)
-            mock_subprocess.assert_called_once()
+            mock_subprocess.assert_called_once_with(
+                ["sox", "-v", "10.0000", str(input_file), str(output_file)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
 
     def test_package_resource_pack(self):
-        """Test the zipping logic and structural enforcement of the resource pack."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             processed_dir = temp_path / "processed_assets"
             repo_root = temp_path / "repo"
             output_zip = temp_path / "output.zip"
 
-            # Create dummy processed structure
             sound_dir = processed_dir / "minecraft" / "sounds"
             sound_dir.mkdir(parents=True)
             (sound_dir / "test.ogg").touch()
 
-            # Create dummy metadata in fake repository root
             repo_root.mkdir()
             (repo_root / "pack.mcmeta").write_text('{"pack":{}}')
             (repo_root / "pack.png").touch()
 
-            # Run packaging
             result = main.package_resource_pack(processed_dir, output_zip, repo_root)
 
             self.assertTrue(result)
             self.assertTrue(output_zip.exists())
 
-            # Verify zip contents are mapped properly
             with zipfile.ZipFile(output_zip, "r") as zipf:
                 namelist = zipf.namelist()
                 self.assertIn("assets/minecraft/sounds/test.ogg", namelist)

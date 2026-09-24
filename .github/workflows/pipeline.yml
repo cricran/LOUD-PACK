@@ -1,9 +1,8 @@
 name: LOUD-PACK Automated Pipeline
 
 on:
-  # Runs automatically every day at 02:00 AM
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 13 * * *'
   # Allows manual triggering from the web interface
   workflow_dispatch:
     inputs:

@@ -85,25 +85,33 @@ def fetch_mojang_manifest() -> dict:
 def resolve_version_metadata_url(
     target_version: str, manifest: dict
 ) -> tuple[str, str]:
+    versions_by_id = {v["id"]: v for v in manifest.get("versions", [])}
+
     if target_version == "newest":
-        target_version = manifest["versions"][0]["id"]
-        logging.info(f"Resolved 'newest' to absolute latest version: {target_version}")
-    if target_version == "latest":
+        latest_rel_id = manifest["latest"]["release"]
+        latest_snap_id = manifest["latest"]["snapshot"]
+
+        rel_time = versions_by_id.get(latest_rel_id, {}).get("releaseTime", "")
+        snap_time = versions_by_id.get(latest_snap_id, {}).get("releaseTime", "")
+
+        if snap_time >= rel_time:
+            target_version = latest_snap_id
+            logging.info(f"Resolved 'newest' to latest snapshot: {target_version}")
+        else:
+            target_version = latest_rel_id
+            logging.info(f"Resolved 'newest' to latest release: {target_version}")
+
+    elif target_version == "latest":
         target_version = manifest["latest"]["release"]
         logging.info(f"Resolved 'latest' to release version: {target_version}")
+
     elif target_version == "snapshot":
         target_version = manifest["latest"]["snapshot"]
         logging.info(f"Resolved 'snapshot' to latest snapshot: {target_version}")
 
-    for version_entry in manifest["versions"]:
-        if version_entry["id"] == target_version:
-            logging.info(
-                f"Successfully resolved metadata URL for version {target_version}"
-            )
-            return (
-                target_version,
-                version_entry["url"],
-            )
+    if target_version in versions_by_id:
+        logging.info(f"Successfully resolved metadata URL for version {target_version}")
+        return target_version, versions_by_id[target_version]["url"]
 
     logging.critical(f"Version '{target_version}' not found in the Mojang manifest.")
     sys.exit(1)
@@ -294,7 +302,9 @@ def upload_to_modrinth(
 
     # Classify as alpha if it's a snapshot (contains 'w' or 'pre' or 'rc')
     version_type = (
-        "alpha" if any(x in mc_version for x in ["w", "pre", "rc"]) else "release"
+        "alpha"
+        if any(x in mc_version for x in ["w", "pre", "rc", "snapshot"])
+        else "release"
     )
 
     data_payload = {
@@ -373,7 +383,9 @@ def upload_to_curseforge(
 
     # 2. Perform the multipart upload
     version_type = (
-        "alpha" if any(x in mc_version for x in ["w", "pre", "rc"]) else "release"
+        "alpha"
+        if any(x in mc_version for x in ["w", "pre", "rc", "snapshot"])
+        else "release"
     )
     metadata = {
         "changelog": f"Auto-generated {__APP_NAME__} release for Minecraft {mc_version}",
